@@ -844,6 +844,15 @@ if (TTS_CPP_BUILD_TESTS)
         ARGS     "--flow-gguf" "${_tcb_cosy_flow_gguf}" "--in-dir" "${_tcb_cosy_ref}"
         REQUIRES "${_tcb_cosy_flow_gguf}" "${_tcb_cosy_ref}/flow_mel.npy")
 
+    # The opt-in prompt-cut path deviates from the reference by design, so it
+    # gets its own leg with a looser reference bound.
+    tts_cpp_register_test(test-cosyvoice-flow-cut
+        EXE      test-cosyvoice-flow
+        LABEL    "fixture"
+        ARGS     "--flow-gguf" "${_tcb_cosy_flow_gguf}" "--in-dir" "${_tcb_cosy_ref}"
+                 "--cut-min-cosine" "0.95"
+        REQUIRES "${_tcb_cosy_flow_gguf}" "${_tcb_cosy_ref}/flow_mel.npy")
+
     # Same binaries on the GPU backend — the per-stage reference legs behind
     # the cosyvoice_engine.cpp allowlist.  Skipped via `ctest -LE gpu`.
     if (TTS_CPP_COSYVOICE_GPU)
@@ -1100,6 +1109,10 @@ if (TTS_CPP_BUILD_TESTS)
                  COMMAND "${Python3_EXECUTABLE}"
                          "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_assemble_cosyvoice3_model.py")
         set_property(TEST test-assemble-cosyvoice3-model PROPERTY LABELS "unit")
+        add_test(NAME test-convert-cosyvoice3-flow
+                 COMMAND "${Python3_EXECUTABLE}"
+                         "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_convert_cosyvoice3_flow.py")
+        set_property(TEST test-convert-cosyvoice3-flow PROPERTY LABELS "unit")
 
         # Skips without torch; the TTS CI macOS lane runs it in the export venv.
         add_test(NAME test-audio8-codec-coreml-exporter
