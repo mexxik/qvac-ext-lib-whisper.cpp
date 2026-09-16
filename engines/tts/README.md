@@ -106,6 +106,15 @@ The same redesign is what fixed test-audio8-codec and test-audio8-lm-vulkan,
 which had been failing on unmodified master since the speech ggml moved past
 their calibration.
 
+CosyVoice3 supports `f32` weights, `q8_0`/`q4_0` LM and flow weights, and
+`f16` flow and HiFT weights. The recommended desktop combination is a
+`q8_0` LM, `q8_0` flow, and `f16` HiFT. The optional
+`cosyvoice-cli --flow-cut-prompt` flag reduces flow work: only the first DiT
+block attends to the voice-prompt frames, and subsequent blocks process the
+generated region. It changes reference output and is off by default. See
+[CosyVoice3 conversion and usage](docs/cosyvoice3.md) for details and the
+unsupported LM `f16` caveat.
+
 CosyVoice3 on CUDA is covered by the same per-stage reference harnesses as
 its other GPU backends, each registered per backend --
 `test-cosyvoice-{flow,llm,hift,conv1d,frontend,clone}-{cuda,vulkan}` and
