@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -59,6 +60,9 @@ void print_usage(const char * argv0) {
         "options:\n"
         "  --n-gpu-layers N        request the GPU stack when > 0 (default 0 = CPU),\n"
         "                          with the same fallbacks a real load applies\n"
+        "  --backend NAME          auto (default), cpu, opencl, hexagon, or a ggml device\n"
+        "                          name; explicit requests have no fallback\n"
+        "  --lm-backend NAME       put the LM on this device (same names; default auto)\n"
         "  --threads N             CPU thread count used for backend resolution\n"
         "  --margin-mib MIB        free-memory headroom to require (default 256)\n"
         "  --backends-dir DIR      directory scanned for dynamically-loaded ggml backends\n"
@@ -66,6 +70,22 @@ void print_usage(const char * argv0) {
         "  --verbose               loader diagnostics on stderr\n"
         "  --help                  this text\n",
         argv0);
+}
+
+const char * json_bool(bool v) {
+    return v ? "true" : "false";
+}
+
+void print_extra_devices_json(const std::vector<tts_cpp::acestep::FitDevicePool> & extras) {
+    std::printf("  \"extraDevices\": [");
+    for (size_t i = 0; i < extras.size(); ++i) {
+        const tts_cpp::acestep::FitDevicePool & d = extras[i];
+        std::printf("%s\n    {\"name\": \"%s\", \"sharesHostMemory\": %s, \"freeBytes\": %" PRIu64
+                    ", \"totalBytes\": %" PRIu64 ", \"peakBytes\": %" PRIu64 "}",
+                    i ? "," : "", json_escape(d.name).c_str(), json_bool(d.shares_host_memory), d.free_bytes,
+                    d.total_bytes, d.peak_bytes);
+    }
+    std::printf("%s],\n", extras.empty() ? "" : "\n  ");
 }
 
 void print_json(const tts_cpp::acestep::FitResult & r, uint64_t margin_bytes) {
@@ -99,6 +119,7 @@ void print_json(const tts_cpp::acestep::FitResult & r, uint64_t margin_bytes) {
     std::printf("\n  ],\n");
     std::printf("  \"peakDeviceBytes\": %" PRIu64 ",\n", r.peak_device_bytes);
     std::printf("  \"peakHostBytes\": %" PRIu64 ",\n", r.peak_host_bytes);
+    print_extra_devices_json(r.extra_devices);
     std::printf("  \"marginBytes\": %" PRIu64 "\n", margin_bytes);
     std::printf("}\n");
 }
@@ -188,6 +209,10 @@ extern "C" int acestep_fit_cli_main(int argc, char ** argv) {
             opts.margin_bytes = margin_mib_to_bytes(mib);
         } else if (a == "--backends-dir" && i + 1 < argc) {
             opts.backends_dir = argv[++i];
+        } else if (a == "--backend" && i + 1 < argc) {
+            opts.backend = argv[++i];
+        } else if (a == "--lm-backend" && i + 1 < argc) {
+            opts.lm_backend = argv[++i];
         } else if (a == "--json") {
             json = true;
         } else if (a == "--verbose" || a == "-v") {

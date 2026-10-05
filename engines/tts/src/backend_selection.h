@@ -115,6 +115,16 @@ ggml_backend_t init_gpu_backend(int n_gpu_layers,
                                 bool * out_gpu_present_but_unused = nullptr,
                                 GpuBackendRequirement requirement = GpuBackendRequirement::Any);
 
+bool backend_request_is_auto(const std::string & requested);
+bool backend_request_matches(const std::string & requested,
+                             const char * reg_name,
+                             const char * device_name);
+ggml_backend_t init_requested_backend(const std::string & requested,
+                                      bool verbose,
+                                      const char * log_prefix);
+
+std::string dsp_library_path_with(const std::string & dir, const char * current);
+
 // Convenience wrapper that picks up the registered CPU device and
 // returns its init handle. Mirrors parakeet-cpp's
 // `init_cpu_backend()`. Never throws; returns nullptr when the
