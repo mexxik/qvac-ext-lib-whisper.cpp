@@ -180,6 +180,20 @@ An unavailable explicit backend fails instead of silently using CPU. Compare
 all stage timings before selecting an optimization; do not assign a mixed
 LM/flow bundle's performance gap to either stage from end-to-end RTF alone.
 
+### CUDA LM attention
+
+Single-token LM decoding uses `FLASH_ATTN_EXT` on CUDA when the backend
+supports the model's head dimensions. The KV cache stays in F32; prefill
+keeps regular attention. The same selection is used by memory-fit projection.
+Unsupported backends and dimensions retain the regular attention path.
+
+`test-cosyvoice-lm-attention-cuda` needs no model files. It checks the
+capability gate and strided-cache attention against a scalar reference across
+short, unaligned, and long cache lengths. `test-cosyvoice-xb-cuda` additionally
+checks exact greedy-token parity against CPU when model fixtures are staged.
+Floating-point differences can change sampled trajectories, so compare
+`lm_decode_per_token` alongside end-to-end timings when profiling.
+
 ### Metal graph paths
 
 On Metal the engine takes graph shapes chosen from a per-op GPU profile, all

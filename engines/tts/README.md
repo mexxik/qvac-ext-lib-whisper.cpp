@@ -72,6 +72,9 @@ Supertonic 3 and Audio8 campaigns, Apple-silicon measurements, streaming
 latency, build pins and reproduction steps live in
 [docs/performance.md](docs/performance.md).
 
+CosyVoice3 uses capability-checked flash attention for single-token LM decoding
+on CUDA and Metal. Unsupported backends or head dimensions retain regular attention.
+
 CosyVoice3 expands bf16 flow weights to f32 when loading on ARM CPUs. This
 avoids scalar bf16 matmuls at twice the resident storage for those weights;
 memory preflight includes the expansion. Prefer an f16 flow bundle on ARM.

@@ -1383,11 +1383,16 @@ if (TTS_CPP_BUILD_TESTS)
         endforeach()
     endif()
 
-    # Cross-backend stage parity on deterministic synthetic inputs (no PyTorch
-    # fixtures, only the stage GGUFs): exact greedy LM trajectory, flow mel
-    # cosine + max-abs, pinned-f0 HiFT waveform cosine — CPU vs the selected
-    # GPU.  Pins the backend-specific graph paths (Metal flash-attention LM
-    # decode, DiT f16-K/V flash attention, batched grouped conv, fused snake).
+    add_executable(test-cosyvoice-lm-attention test/test_cosyvoice_lm_attention.cpp)
+    target_link_libraries(test-cosyvoice-lm-attention PRIVATE tts-cpp ggml)
+    target_include_directories(test-cosyvoice-lm-attention PRIVATE src)
+    tts_cpp_apply_ccache(test-cosyvoice-lm-attention)
+    tts_cpp_register_test(test-cosyvoice-lm-attention LABEL "unit")
+    if (TTS_CPP_GGML_CUDA AND _tts_cosy_desktop_platform)
+        tts_cpp_register_test(test-cosyvoice-lm-attention-cuda
+            EXE test-cosyvoice-lm-attention LABEL "gpu" ARGS "CUDA0")
+    endif()
+
     add_executable(test-cosyvoice-xb test/test_cosyvoice_xb.cpp)
     target_link_libraries(test-cosyvoice-xb PRIVATE tts-cpp ggml)
     target_include_directories(test-cosyvoice-xb PRIVATE ggml/include src)

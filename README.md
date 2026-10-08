@@ -32,6 +32,9 @@ validated on it.
 | [AudioGen](engines/audiogen/README.md) | ACE-Step v15 turbo/sft/base | Music generation and editing; base additionally supports lego stems |
 | AudioGen | MiniMax-Music3 | Desktop music generation on CPU or GPU, with a metadata-only [memory-fit preflight](engines/audiogen/docs/memory-fit.md); unavailable on Android/iOS |
 
+CosyVoice3 uses capability-checked flash attention for single-token LM decoding
+on CUDA and Metal. Unsupported backends or head dimensions retain regular attention.
+
 CosyVoice3 expands bf16 flow weights to f32 on ARM CPUs to avoid scalar bf16
 matmuls; f16 remains the recommended ARM flow bundle. Its benchmark supports
 independent LM, flow and HiFT model overrides for
