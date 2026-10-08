@@ -1,4 +1,5 @@
 #include "cosyvoice_pipeline.h"
+#include "backend_util.h"
 #include "ggml-alloc.h"
 
 #include <algorithm>
@@ -13,6 +14,7 @@ constexpr int kHeadDim = 64;
 constexpr int kHeads = 14;
 constexpr int kKvHeads = 2;
 constexpr int kCacheSlack = 17;
+constexpr int kProbeLength = 64;
 constexpr int kUnsupportedHeadDim = 16;
 constexpr float kTolerance = 0.005f;
 constexpr float kQueryFrequency = 0.031f;
@@ -22,6 +24,21 @@ constexpr size_t kContextBytes = 1024 * 1024;
 
 void require(bool condition, const char * message) {
     if (!condition) throw std::runtime_error(message);
+}
+
+bool supports_lm_attention(ggml_backend_t backend, const qwen_hp & hp) {
+    if (!tts_cpp::detail::backend_is_cuda(backend) &&
+        !tts_cpp::detail::backend_is_metal(backend)) return false;
+    ggml_context * ctx = ggml_init({kContextBytes, nullptr, true});
+    require(ctx != nullptr, "cannot create attention probe context");
+    ggml_tensor * q = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hp.head_dim, 1, hp.n_head, 1);
+    ggml_tensor * k = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, hp.head_dim, kProbeLength, hp.n_kv, 1);
+    ggml_tensor * v = ggml_dup_tensor(ctx, k);
+    ggml_tensor * out = ggml_flash_attn_ext(ctx, q, k, v, nullptr, 1.0f, 0, 0);
+    ggml_flash_attn_ext_set_prec(out, GGML_PREC_F32);
+    const bool supported = ggml_backend_supports_op(backend, out);
+    ggml_free(ctx);
+    return supported;
 }
 
 std::vector<float> make_values(size_t count, float frequency) {
@@ -124,13 +141,14 @@ int main(int argc, char ** argv) {
     try {
         qwen_hp hp;
         const bool enabled = cosyvoice_lm_fa_enabled(backend, hp);
-        require(enabled == (argc > 1), "unexpected LM flash-attention selection");
+        require(enabled == supports_lm_attention(backend, hp), "unexpected LM flash-attention selection");
         if (enabled) {
             hp.head_dim = kUnsupportedHeadDim;
             require(!cosyvoice_lm_fa_enabled(backend, hp), "unsupported geometry must use regular attention");
             check_lengths(backend);
         }
-        fprintf(stderr, "PASS: CosyVoice LM attention\n");
+        fprintf(stderr, "PASS: CosyVoice LM attention (%s)\n",
+                enabled ? "flash attention" : "regular attention");
     } catch (const std::exception & error) {
         fprintf(stderr, "FAIL: %s\n", error.what());
         result = 1;
