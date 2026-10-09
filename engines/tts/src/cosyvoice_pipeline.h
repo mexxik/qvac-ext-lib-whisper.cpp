@@ -137,6 +137,7 @@ struct qwen_hp {
 // this instead of a default-constructed qwen_hp so the graph shape follows the
 // weights rather than hardcoded numbers.
 qwen_hp cosyvoice_qwen_hp(const model_ctx & m);
+bool cosyvoice_lm_fa_enabled(ggml_backend_t backend, const qwen_hp & hp);
 struct dit_hp {
     int depth = 22, dim = 1024, heads = 16, dim_head = 64, ff_inner = 2048;
     int conv_k = 31, conv_groups = 16;

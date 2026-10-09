@@ -966,14 +966,9 @@ static std::vector<float> build_lm_input(model_ctx & m, const std::vector<int> &
     return seq;
 }
 
-// FA for the LM's single-token decode steps replaces the two attention
-// matmuls, the softmax, and two layout copies per layer with one node, and
-// drops the per-step causal-mask build + upload.  Its reduction order differs
-// from the naive chain, so backends whose greedy trajectory is gated on exact
-// equality keep the measured naive path; Metal is opted in after measuring
-// both speed and trajectory stability on M3 Ultra / M4.
-static bool cosy_lm_fa_enabled(ggml_backend_t backend, const qwen_hp & hp) {
-    if (!::tts_cpp::detail::backend_is_metal(backend)) return false;
+bool cosyvoice_lm_fa_enabled(ggml_backend_t backend, const qwen_hp & hp) {
+    if (!::tts_cpp::detail::backend_is_metal(backend) &&
+        !::tts_cpp::detail::backend_is_cuda(backend)) return false;
     ggml_init_params ip = { 8 * ggml_tensor_overhead(), nullptr, /*no_alloc=*/true };
     ggml_context * c = ggml_init(ip);
     if (!c) return false;
@@ -1005,7 +1000,7 @@ std::vector<int> cosyvoice_llm_generate(model_ctx & m, const qwen_hp & hp,
     std::vector<int> tokens;
     std::mt19937 rng(seed);
     // Cache holds the L0 prefill positions plus up to max_steps decode positions.
-    qwen_kvcache cache; cache.init(m, hp, L0 + max_steps + 1, cosy_lm_fa_enabled(m.backend, hp));
+    qwen_kvcache cache; cache.init(m, hp, L0 + max_steps + 1, cosyvoice_lm_fa_enabled(m.backend, hp));
     // One allocator for the entire decode (see the note in qwen_step_kv).
     ggml_gallocr_t al = ggml_gallocr_new(ggml_backend_get_default_buffer_type(m.backend));
     if (!al) { cache.free(); throw std::runtime_error("cosyvoice: gallocr alloc failed (LM)"); }
@@ -2083,7 +2078,7 @@ bool cosy_fit_price(model_ctx & m, ggml_cgraph * gf, size_t nmax,
 uint64_t cosy_fit_kv_init_measure(qwen_kvcache & cache, model_ctx & m, const qwen_hp & hp,
                                   int max_tokens) {
     cache.backend = m.backend; cache.max_P = max_tokens; cache.P = 0;
-    cache.fa = cosy_lm_fa_enabled(m.backend, hp);
+    cache.fa = cosyvoice_lm_fa_enabled(m.backend, hp);
     const int HD = hp.head_dim, NKV = hp.n_kv, depth = hp.depth;
     ggml_init_params p = { ggml_tensor_overhead() * (size_t)(2 * depth) + 64, nullptr, /*no_alloc=*/true };
     cache.ctx = ggml_init(p);
@@ -2204,7 +2199,7 @@ bool cosyvoice_fit_llm_parity_probe(model_ctx & m, const qwen_hp & hp, int L0, i
     const int VS = (int)T(m, "lm/llm_decoder/weight")->ne[1];
     try {
         qwen_kvcache cache;
-        cache.init(m, hp, L0 + n_steps + 1, cosy_lm_fa_enabled(m.backend, hp));
+        cache.init(m, hp, L0 + n_steps + 1, cosyvoice_lm_fa_enabled(m.backend, hp));
         if (!cache.buf) {
             if (error) *error = "parity probe: KV allocation failed";
             cache.free();

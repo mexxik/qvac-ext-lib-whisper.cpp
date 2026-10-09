@@ -7,7 +7,7 @@
 // pins what a backend-specific graph path can break:
 //
 //   llm   engine-level greedy speech-token trajectory, EXACT equality.
-//         Covers the Metal flash-attention decode step, the fused-qkv
+//         Covers the CUDA/Metal flash-attention decode step, the fused-qkv
 //         matvec, and the maskless single-token softmax against the naive
 //         masked chain.  Engine-level because only real conditioning (the
 //         baked voice prompt + tokenized text) keeps the LM's distribution
