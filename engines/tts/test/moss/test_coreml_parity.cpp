@@ -166,10 +166,10 @@ void check_partial_segment_on_ggml(SpeechTokenizer & coreml, SpeechTokenizer & g
 
 void test_tokenizer_codes(const std::string & codec_path, const std::vector<float> & audio) {
     set_env(COREML_STRICT_ENV);
-    SpeechTokenizer coreml(codec_path, use_gpu(), PARITY_THREADS);
+    SpeechTokenizer coreml(codec_path, {"", use_gpu()}, PARITY_THREADS);
     clear_env(COREML_STRICT_ENV);
     set_env(COREML_DISABLE_ENV);
-    SpeechTokenizer ggml(codec_path, use_gpu(), PARITY_THREADS);
+    SpeechTokenizer ggml(codec_path, {"", use_gpu()}, PARITY_THREADS);
     clear_env(COREML_DISABLE_ENV);
     check(coreml.on_coreml() && !ggml.on_coreml(), "the staged tokenizer sidecar attaches; MOSS_COREML_DISABLE skips it");
     if (!coreml.on_coreml()) {
@@ -189,7 +189,7 @@ void test_tokenizer_strict_without_sidecar(const std::string & codec_path, const
     set_env(COREML_STRICT_ENV);
     bool failed = false;
     try {
-        SpeechTokenizer tokenizer(bare.string(), use_gpu(), PARITY_THREADS);
+        SpeechTokenizer tokenizer(bare.string(), {"", use_gpu()}, PARITY_THREADS);
         tokenizer.encode(audio);
     } catch (const std::exception & e) {
         failed = std::string(e.what()).find(COREML_STRICT_ENV) != std::string::npos;
@@ -203,7 +203,7 @@ void test_tokenizer_invalid_sidecar(const std::string & codec_path, const std::v
     const auto dir = scratch_dir("speech-invalid");
     const auto staged = linked_file(dir, codec_path);
     std::filesystem::create_directories(speech_tokenizer_sidecar_path(staged.string()));
-    SpeechTokenizer tokenizer(staged.string(), use_gpu(), PARITY_THREADS);
+    SpeechTokenizer tokenizer(staged.string(), {"", use_gpu()}, PARITY_THREADS);
     tokenizer.begin_run();
     tokenizer.encode(audio);
     check(!tokenizer.on_coreml() && tokenizer.run_backend() == GGML_STAGE_BACKEND,
@@ -302,7 +302,7 @@ bool run_sound_effect() {
         return false;
     }
     {
-        tts_cpp::moss::detail::SfxModel model(model_path, use_gpu(), PARITY_THREADS);
+        tts_cpp::moss::detail::SfxModel model(model_path, {"", use_gpu()}, PARITY_THREADS);
         test_sfx_dit(model, model_path);
         test_sfx_vae(model, model_path);
     }
@@ -338,10 +338,10 @@ std::vector<float> stream_codes(Codec & codec, const std::vector<int32_t> & code
 
 void test_codec_decode(const std::string & decoder_path) {
     set_env(COREML_STRICT_ENV);
-    Codec coreml(decoder_path, use_gpu(), PARITY_THREADS);
+    Codec coreml(decoder_path, {"", use_gpu()}, PARITY_THREADS);
     clear_env(COREML_STRICT_ENV);
     set_env(COREML_DISABLE_ENV);
-    Codec ggml(decoder_path, use_gpu(), PARITY_THREADS);
+    Codec ggml(decoder_path, {"", use_gpu()}, PARITY_THREADS);
     clear_env(COREML_DISABLE_ENV);
     check(coreml.on_coreml() && !ggml.on_coreml(), "the staged codec sidecar attaches; MOSS_COREML_DISABLE skips it");
     if (!coreml.on_coreml()) {
@@ -363,7 +363,7 @@ void test_codec_invalid_sidecar(const std::string & decoder_path) {
     const auto dir = scratch_dir("codec-invalid");
     const auto staged = linked_file(dir, decoder_path);
     std::filesystem::create_directories(codec_decoder_sidecar_path(staged.string()));
-    Codec codec(staged.string(), use_gpu(), PARITY_THREADS);
+    Codec codec(staged.string(), {"", use_gpu()}, PARITY_THREADS);
     check(!codec.on_coreml(), "a codec sidecar directory that is not a model leaves the codec on ggml");
     std::filesystem::remove_all(dir);
 }

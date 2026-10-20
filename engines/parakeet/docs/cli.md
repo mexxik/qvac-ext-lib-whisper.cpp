@@ -23,6 +23,34 @@ at `--model`) and the attributed path (`--diarization-model`) return before
 the bench loop, ignoring the `--bench*` flags — time the invocation externally
 to benchmark those.
 
+### Long-form window flags
+
+Offline transcription encodes an input longer than one window in overlapping
+windows, so the encoder's memory depends on the window rather than on the
+length of the recording. `--window-sec S` sets the window (at least 256 encoder
+frames, 20.5 s at the 80 ms stride; at most the model's positional range, 400 s
+for TranscribePsy) and `--overlap F` the fraction of each window shared with its
+neighbours, from 0 to 0.5. Without the flags the model's own recommended
+window applies when its GGUF carries one, which TranscribePsy's does (60 s
+with 25 % overlap, the setting the research team validated on phones);
+otherwise the engine's automatic window applies (the fewest windows of at most
+300 s, or the model's range if shorter, balanced to equal length, with 256
+frames of context each side). `--window-sec 0` encodes the whole input in one pass, whose memory grows
+with the square of its length. Inputs shorter than the window are encoded in
+one pass at their own length either way. `--stream`, `--diarization-model` and
+`--profile` run their own encoder passes and ignore both flags with a warning.
+
+`--window-sec 60 --overlap 0.25` is the setting TranscribePsy was validated
+with on phones. On a 412 s recording transcribed with TranscribePsy q8_0 on an
+x86-64 CPU with eight threads, it cut the encoder time from 18.0 s to 10.8 s
+and peak memory from 2.4 GB to 0.9 GB against the automatic 300 s window:
+
+```bash
+build-parakeet/parakeet \
+  --model engines/parakeet/models/transcribepsy-250m-eu-sub.gguf \
+  --wav long.wav --threads 6 --window-sec 60 --overlap 0.25
+```
+
 `--backend hexagon` explicitly requests HTP0, even when OpenCL is present.
 `--backend cpu` and `--backend opencl` select comparison backends. Explicit
 selection overrides `--n-gpu-layers` and fails if unavailable; omit the option
@@ -84,7 +112,18 @@ build-parakeet/parakeet-fit-params \
 build-parakeet/parakeet-fit-params \
   --model engines/parakeet/models/parakeet-tdt-0.6b-v3.q8_0.gguf \
   --n-gpu-layers 1 --json
+
+# Explicit Snapdragon Hexagon projection
+build-parakeet/parakeet-fit-params \
+  --model engines/parakeet/models/parakeet-ctc-0.6b.q8_0.gguf --backend hexagon
 ```
+
+`--backend` (`FitOptions::backend`) takes the same names as the engine's
+`--backend`: `auto` follows `--n-gpu-layers`; `cpu`, `opencl`, `hexagon` or an
+exact ggml device name projects for that backend, and an unavailable one is an
+error with reason `no-backend-device`, as a real load fails. A Hexagon session
+allocates host memory and reports none of its own, so the verdict reads the
+CPU device's free memory and charges host buffers to the same pool.
 
 The workload (`--audio-seconds`, default 300) sets the longest single
 transcribe input to project for. Device-side memory is bounded by the
@@ -131,7 +170,9 @@ before it compares the projection with real reservations.
 The projection is exact where it can be: `test-fit-params` asserts the
 projected weight, encoder-compute, Sortformer-head, Nemotron
 prompt/step/pre-encode, and Nemotron 3 Diarization graph bytes equal what a
-real load/encode/diarize/stream allocates, byte for byte. For the legacy families (CTC/RNN-T/TDT/EOU) the
+real load/encode/diarize/stream allocates, byte for byte. On Hexagon each
+buffer also carries a 4 KiB guard page that ggml does not report, so the
+projection is short by one page per buffer. For the legacy families (CTC/RNN-T/TDT/EOU) the
 projection covers the offline paths; their streaming sessions build smaller
 per-chunk graphs but rotate through the same graph cache with
 session-dependent keys, so treat the offline projection as a guide, not a

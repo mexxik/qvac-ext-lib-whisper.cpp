@@ -22,18 +22,20 @@ void print_usage() {
         "       [--language zh] [--duration-tokens 0]   target length, 12.5 tokens per second\n"
         "       [--max-new-tokens 2048] [--context 4096]\n"
         "       [--stream] [--stream-chunk-frames 25]\n"
-        "       [--seed 1234] [--threads 4] [--gpu] [--backends-dir dir]\n"
+        "       [--seed 1234] [--threads 4] [--gpu] [--backend auto|cpu|hexagon|DEVICE] [--backends-dir dir]\n"
         "       [--text-temperature 1.5] [--text-top-p 1.0] [--text-top-k 50]\n"
         "       [--audio-temperature 1.7] [--audio-top-p 0.8] [--audio-top-k 25]\n"
         "       [--audio-repetition-penalty 1.0]\n"
         "       moss-cli --mode sfx --model sfx.gguf --text \"rain on a tin roof\" --out out.wav\n"
-        "       [--seconds 10] [--negative-prompt \"...\"] [--seed 0] [--threads 4] [--gpu] [--backends-dir dir]\n"
+        "       [--seconds 10] [--negative-prompt \"...\"] [--seed 0] [--threads 4] [--gpu]\n"
+        "       [--backend auto|cpu|hexagon|DEVICE] [--backends-dir dir]\n"
         "       [--steps N] [--guidance G] [--shift S]   defaults come from the model file\n"
         "       moss-cli --mode s2s --model moss-speech.gguf --codec moss-speech-codec.gguf --audio question.wav\n"
         "       [--out reply.wav] [--voice voice.wav] [--system \"...\"] [--max-reply-seconds S]\n"
         "       [--max-new-tokens 0]   0: use remaining model context; positive: explicit reply budget\n"
         "       [--greedy] [--temperature 0.7] [--top-p 0.95] [--top-k 20]\n"
-        "       [--seed 0] [--text-reply] [--threads 4] [--gpu] [--backends-dir dir]\n");
+        "       [--seed 0] [--text-reply] [--threads 4] [--gpu] [--backend auto|cpu|hexagon|DEVICE]\n"
+        "       [--backends-dir dir]\n");
 }
 
 namespace {
@@ -76,11 +78,13 @@ bool parse_mode(const std::string & value, Mode & mode) {
 void share_runtime_flags(CliArgs & args) {
     args.sound_options.n_threads = args.options.n_threads;
     args.sound_options.use_gpu = args.options.use_gpu;
+    args.sound_options.backend = args.options.backend;
     args.sound_options.backends_dir = args.options.backends_dir;
     args.sound_request.prompt = args.text;
     args.s2s_options.model_path = args.sound_options.model_path;
     args.s2s_options.n_threads = args.options.n_threads;
     args.s2s_options.use_gpu = args.options.use_gpu;
+    args.s2s_options.backend = args.options.backend;
     args.s2s_options.backends_dir = args.options.backends_dir;
 }
 
@@ -242,6 +246,7 @@ bool parse_args(int argc, const char * const * argv, CliArgs & args) {
         else if (flag == "--shift")         args.sound_request.shift = std::strtof(next(), nullptr);
         else if (flag == "--threads")       args.options.n_threads = std::atoi(next());
         else if (flag == "--gpu")           args.options.use_gpu = true;
+        else if (flag == "--backend")       args.options.backend = next();
         else if (flag == "--stream")        args.stream = true;
         else if (flag == "--stream-chunk-frames")   args.options.stream_chunk_frames = std::atoi(next());
         else if (flag == "--backends-dir")  args.options.backends_dir = next();

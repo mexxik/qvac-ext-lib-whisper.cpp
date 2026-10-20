@@ -417,9 +417,11 @@ inference cost (well under real-time on any GPU backend).
 - `--backend NAME` (`supertonic-cli`, `supertonic-bench`,
   `supertonic-fit-params`, `parler-cli`, `parler-bench`,
   `parler-fit-params`, `cosyvoice-cli`, `cosyvoice-bench`,
-  `cosyvoice-fit-params`) — run on one device: `cpu`, `opencl`, `hexagon`
-  (the Snapdragon HTP0 NPU) or an exact ggml device name. It overrides
-  `--n-gpu-layers` and fails instead of falling back when the device is
+  `cosyvoice-fit-params`, and `moss-cli` in every mode) — run on
+  one device: `cpu`, `opencl`, `hexagon` (the Snapdragon HTP0 NPU) or an
+  exact ggml device name; MOSS is validated on `cpu` and `hexagon` only. It overrides `--n-gpu-layers` (`--gpu` on
+  `moss-cli`, except that in `s2s` mode `--gpu` still places the S3Gen decoder
+  on the automatic GPU) and fails instead of falling back when the device is
   missing; the automatic walk never picks Hexagon.
 - `--reference-audio PATH` — voice cloning input (see the Custom voice
   section above).

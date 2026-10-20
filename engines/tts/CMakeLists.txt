@@ -26,7 +26,7 @@ option(TTS_CPP_USE_SYSTEM_GGML   "tts-cpp: use find_package(ggml) instead of add
 # does not expose the standalone filename-prefix option; the speech branch or
 # `ggml-speech` vcpkg port already emits the integrated filenames.
 option(TTS_CPP_CCACHE            "tts-cpp: use ccache as compiler launcher if available"     ON)
-option(TTS_CPP_COREML            "tts-cpp: enable the Apple Core ML (Neural Engine) sidecars for the Audio8 codec synthesis stack, the Supertonic vocoder and the MOSS stages (Apple-only, additive; each stage runs on its .mlmodelc next to the GGUF when present, else on ggml)." OFF)
+option(TTS_CPP_COREML            "tts-cpp: enable the Apple Core ML (Neural Engine) sidecars for the Audio8 codec synthesis stack, the Supertonic vocoder, CosyVoice3 stages and the MOSS stages (Apple-only, additive; each stage runs on its .mlmodelc next to the GGUF when present, else on ggml)." OFF)
 
 # OBJC + OBJCXX up front, before any add_subdirectory(ggml); see engines/parakeet.
 if (TTS_CPP_COREML)
@@ -204,7 +204,7 @@ endif()
 # variants register only for backends that engine's production allowlist
 # accepts, so an off-allowlist build neither runs unvalidated backends nor
 # silently skips validated ones.
-foreach(_tts_ggml_backend metal vulkan cuda opencl)
+foreach(_tts_ggml_backend metal vulkan cuda opencl hexagon)
     string(TOUPPER "${_tts_ggml_backend}" _tts_ggml_backend_uc)
     set(TTS_CPP_GGML_${_tts_ggml_backend_uc} FALSE)
     if (GGML_${_tts_ggml_backend_uc} OR
@@ -312,6 +312,8 @@ set(TTS_CPP_LIB_SOURCES
     # cosyvoice_pipeline.cpp is the shared graph core (LM / DiT flow / HiFT),
     # also used by the cosyvoice-{llm,flow,hift} parity CLIs below.
     src/cosyvoice_pipeline.cpp
+    src/cosyvoice_coreml.cpp
+    src/cosyvoice_coreml_pipeline.cpp
     src/cosyvoice_instruct.cpp
     src/cosyvoice_frontend.cpp
     src/cosyvoice_engine.cpp
@@ -361,13 +363,15 @@ set(TTS_CPP_LIB_SOURCES
     src/audio8/coreml_path.cpp
     src/audio8/sampling.cpp
     src/audio8/engine.cpp
-    # Pocket TTS numerical core; Mimi synthesis is not exposed yet.
+    # Pocket TTS FlowLM/Mimi numerical core and public synthesis API.
     src/pocket/flow_lm.cpp
     src/pocket/mimi.cpp
     src/pocket/frontend.cpp
     src/pocket/engine.cpp
     src/pocket/fit.cpp
     src/pocket/reference_audio.cpp
+    src/moss/backend_request.cpp
+    src/moss/host_tables.cpp
     src/moss/codec.cpp
     src/moss/delay_lm.cpp
     src/moss/generation.cpp
@@ -456,7 +460,7 @@ if (TTS_CPP_BUILD_LIBRARY)
     )
     target_compile_features(tts-cpp PUBLIC cxx_std_17)
 
-    # Core ML sidecars (Audio8 codec, Supertonic vocoder, MOSS stages): ARC objects fold
+    # Core ML sidecars (Audio8 codec, Supertonic vocoder, CosyVoice3 stages, MOSS stages): ARC objects fold
     # into libtts-cpp; frameworks are PUBLIC for static consumers.
     if (TTS_CPP_COREML)
         find_library(TTS_CPP_FOUNDATION_FRAMEWORK Foundation REQUIRED)
@@ -480,7 +484,7 @@ if (TTS_CPP_BUILD_LIBRARY)
             ${TTS_CPP_FOUNDATION_FRAMEWORK}
             ${TTS_CPP_COREML_FRAMEWORK}
         )
-        message(STATUS "tts-cpp: Core ML sidecars enabled (TTS_CPP_USE_COREML): Audio8 codec, Supertonic vocoder, MOSS stages")
+        message(STATUS "tts-cpp: Core ML sidecars enabled (TTS_CPP_USE_COREML): Audio8 codec, Supertonic vocoder, CosyVoice3 stages, MOSS stages")
     endif()
     target_link_libraries(tts-cpp PUBLIC ggml)
     find_package(Threads REQUIRED)
@@ -590,6 +594,8 @@ endif()
 # executables/tests blocks because both consume it.  Mirrors _tcb_parler_core_srcs.
 set(_tcb_cosy_core_srcs
     src/cosyvoice_pipeline.cpp
+    src/cosyvoice_coreml.cpp
+    src/cosyvoice_coreml_pipeline.cpp
     src/backend_selection.cpp
     src/sched_dispatch.cpp)
 
@@ -1250,6 +1256,11 @@ if (TTS_CPP_BUILD_TESTS)
         set_property(TEST test-supertonic-coreml-exporter PROPERTY ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
         set_property(TEST test-supertonic-coreml-exporter PROPERTY SKIP_REGULAR_EXPRESSION "SKIP: numpy")
 
+        add_test(NAME test-cosyvoice-coreml-exporter
+                 COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/test_export_cosyvoice_coreml.py")
+        set_tests_properties(test-cosyvoice-coreml-exporter PROPERTIES
+            LABELS "unit" ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1" SKIP_REGULAR_EXPRESSION "SKIP: ")
+
         foreach(_moss_exporter IN ITEMS speech_tokenizer sfx codec)
             string(REPLACE "_" "-" _moss_exporter_test "${_moss_exporter}")
             add_test(NAME test-moss-${_moss_exporter_test}-coreml-exporter
@@ -1450,6 +1461,23 @@ if (TTS_CPP_BUILD_TESTS)
 
     # Map-in-place loader: byte-exact round-trip + clean failure on a truncated
     # GGUF. Self-contained (writes its own synthetic GGUF), so it always runs.
+    add_executable(test-cosyvoice-coreml test/test_cosyvoice_coreml.cpp)
+    target_link_libraries(test-cosyvoice-coreml PRIVATE tts-cpp)
+    target_include_directories(test-cosyvoice-coreml PRIVATE src)
+    if (TTS_CPP_COREML)
+        target_compile_definitions(test-cosyvoice-coreml PRIVATE TTS_CPP_USE_COREML)
+    endif()
+    tts_cpp_apply_ccache(test-cosyvoice-coreml)
+    tts_cpp_register_test(test-cosyvoice-coreml LABEL "unit")
+    tts_cpp_register_test(test-cosyvoice-coreml-lm
+        EXE test-cosyvoice-coreml LABEL "fixture" ARGS "--lm-fixture")
+    tts_cpp_register_test(test-cosyvoice-coreml-stages
+        EXE test-cosyvoice-coreml LABEL "fixture" ARGS "--stages-fixture")
+    tts_cpp_register_test(test-cosyvoice-coreml-routing
+        EXE test-cosyvoice-coreml LABEL "fixture" ARGS "--routing-fixture")
+    set_tests_properties(test-cosyvoice-coreml-lm test-cosyvoice-coreml-stages test-cosyvoice-coreml-routing
+        PROPERTIES SKIP_RETURN_CODE 77)
+
     add_executable(test-cosyvoice-load test/test_cosyvoice_load.cpp ${_tcb_cosy_core_srcs})
     target_link_libraries(test-cosyvoice-load PRIVATE ggml)
     target_include_directories(test-cosyvoice-load PRIVATE ggml/include src)
@@ -1485,15 +1513,18 @@ if (TTS_CPP_BUILD_TESTS)
                  "--ref" "${_tcb_cosy_ref}/tokenizer_ref.txt"
         REQUIRES "${_tcb_cosy_vocab}" "${_tcb_cosy_merges}" "${_tcb_cosy_ref}/tokenizer_ref.txt")
 
-    # CPU/GPU parity on generated GGUFs, one arm per compiled backend. Each
-    # arm pins its backend, so a build carrying both fails loud instead of
-    # passing on the other GPU.
+    # CPU/accelerator parity on generated GGUFs, one arm per compiled backend.
+    # Each arm pins its backend, so a build carrying several fails loud instead
+    # of passing on another one.
     set(_tcb_moss_arms "")
     if (TTS_CPP_GGML_CUDA)
         list(APPEND _tcb_moss_arms cuda)
     endif()
     if (TTS_CPP_GGML_VULKAN)
         list(APPEND _tcb_moss_arms vulkan)
+    endif()
+    if (TTS_CPP_GGML_HEXAGON)
+        list(APPEND _tcb_moss_arms hexagon)
     endif()
     if (_tcb_moss_arms)
         add_executable(test-moss-gpu test/moss/test_gpu.cpp)
@@ -1529,6 +1560,12 @@ if (TTS_CPP_BUILD_TESTS)
     target_include_directories(test-moss-load PRIVATE src)
     tts_cpp_apply_ccache(test-moss-load)
     tts_cpp_register_test(test-moss-load)
+
+    add_executable(test-moss-hexagon-layout test/moss/test_hexagon_layout.cpp)
+    target_link_libraries(test-moss-hexagon-layout PRIVATE tts-cpp)
+    target_include_directories(test-moss-hexagon-layout PRIVATE src)
+    tts_cpp_apply_ccache(test-moss-hexagon-layout)
+    tts_cpp_register_test(test-moss-hexagon-layout)
 
     add_executable(test-moss-stream test/moss/test_stream.cpp)
     target_link_libraries(test-moss-stream PRIVATE tts-cpp)
@@ -1667,6 +1704,8 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_register_test(test-pocket-reference-audio LABEL "unit")
     set(TTS_CPP_POCKET_MODEL_DIR "${TTS_CPP_TEST_MODEL_DIR}/pocket"
         CACHE PATH "Complete Pocket bundle for frontend and engine fixtures")
+    option(TTS_CPP_POCKET_OPENCL_TESTS "Run Pocket fixtures explicitly on OpenCL (requires hardware)" OFF)
+    option(TTS_CPP_POCKET_HEXAGON_TESTS "Run Pocket fixtures explicitly on Hexagon HTP0 (requires hardware)" OFF)
     add_executable(test-pocket-frontend test/pocket/test_frontend.cpp src/pocket/frontend.cpp)
     target_include_directories(test-pocket-frontend PRIVATE src)
     tts_cpp_register_test(test-pocket-frontend LABEL "fixture"
@@ -1687,6 +1726,19 @@ if (TTS_CPP_BUILD_TESTS)
             ARGS "${TTS_CPP_POCKET_MODEL_DIR}" "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf"
             REQUIRES "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "${TTS_CPP_POCKET_MODEL_DIR}/mimi.gguf"
                      "${TTS_CPP_POCKET_MODEL_DIR}/frontend.json" "${TTS_CPP_POCKET_MODEL_DIR}/voice.gguf")
+        foreach(_pocket_backend opencl hexagon)
+            string(TOUPPER "${_pocket_backend}" _pocket_backend_uc)
+            if (TTS_CPP_POCKET_${_pocket_backend_uc}_TESTS)
+                tts_cpp_register_test(test-pocket-fit-${_pocket_backend} LABEL "fixture" EXE test-pocket-fit
+                    ARGS "${TTS_CPP_POCKET_MODEL_DIR}" ${_pocket_backend}
+                    REQUIRES "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "${TTS_CPP_POCKET_MODEL_DIR}/mimi.gguf"
+                             "${TTS_CPP_POCKET_MODEL_DIR}/frontend.json" "${TTS_CPP_POCKET_MODEL_DIR}/voice.gguf")
+                tts_cpp_register_test(test-pocket-engine-${_pocket_backend} LABEL "fixture" EXE test-pocket-engine
+                    ARGS "${TTS_CPP_POCKET_MODEL_DIR}" "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" ${_pocket_backend}
+                    REQUIRES "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "${TTS_CPP_POCKET_MODEL_DIR}/mimi.gguf"
+                             "${TTS_CPP_POCKET_MODEL_DIR}/frontend.json" "${TTS_CPP_POCKET_MODEL_DIR}/voice.gguf")
+            endif()
+        endforeach()
     endif()
     set(TTS_CPP_POCKET_REFERENCE_DIR "${TTS_CPP_TEST_MODEL_DIR}/pocket-reference"
         CACHE PATH "Pocket FlowLM fixtures from dump-pocket-flow-reference.py")
@@ -1698,6 +1750,11 @@ if (TTS_CPP_BUILD_TESTS)
         set(_pocket_test_sources)
         set(_pocket_test_library tts-cpp)
     endif()
+    add_executable(test-pocket-backend test/pocket/test_backend.cpp ${_pocket_test_sources})
+    target_link_libraries(test-pocket-backend PRIVATE ${_pocket_test_library})
+    target_include_directories(test-pocket-backend PRIVATE include src)
+    tts_cpp_apply_ccache(test-pocket-backend)
+    tts_cpp_register_test(test-pocket-backend LABEL "unit")
     add_executable(test-pocket-load test/pocket/test_load.cpp
         ${_pocket_test_sources})
     target_link_libraries(test-pocket-load PRIVATE ${_pocket_test_library})
@@ -1715,6 +1772,17 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_register_test(test-pocket-flow-lm-f16 LABEL "fixture" EXE test-pocket-flow-lm
         ARGS "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}" "0.01"
         REQUIRES "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}/provenance.json")
+    foreach(_pocket_backend opencl hexagon)
+        string(TOUPPER "${_pocket_backend}" _pocket_backend_uc)
+        if (TTS_CPP_POCKET_${_pocket_backend_uc}_TESTS)
+            tts_cpp_register_test(test-pocket-flow-lm-${_pocket_backend} LABEL "fixture" EXE test-pocket-flow-lm
+                ARGS "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f32.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}" "0.0001" ${_pocket_backend}
+                REQUIRES "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f32.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}/provenance.json")
+            tts_cpp_register_test(test-pocket-flow-lm-f16-${_pocket_backend} LABEL "fixture" EXE test-pocket-flow-lm
+                ARGS "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}" "0.01" ${_pocket_backend}
+                REQUIRES "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}/provenance.json")
+        endif()
+    endforeach()
 
     add_executable(test-pocket-mimi test/pocket/test_mimi.cpp ${_pocket_test_sources})
     target_link_libraries(test-pocket-mimi PRIVATE ${_pocket_test_library})
@@ -1729,6 +1797,50 @@ if (TTS_CPP_BUILD_TESTS)
                  "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/latents.npy"
                  "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/pcm.npy"
                  "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/encoded.npy")
+    foreach(_pocket_backend opencl hexagon)
+        string(TOUPPER "${_pocket_backend}" _pocket_backend_uc)
+        if (TTS_CPP_POCKET_${_pocket_backend_uc}_TESTS)
+            tts_cpp_register_test(test-pocket-mimi-${_pocket_backend} LABEL "fixture" EXE test-pocket-mimi
+                ARGS "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/mimi.gguf" "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}" ${_pocket_backend}
+                REQUIRES "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/mimi.gguf"
+                         "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/provenance.json"
+                         "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/latents.npy"
+                         "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/pcm.npy"
+                         "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/encoded.npy")
+        endif()
+    endforeach()
+
+    foreach(_pocket_backend IN ITEMS metal cuda vulkan)
+        string(TOUPPER "${_pocket_backend}" _pocket_backend_upper)
+        if (NOT GGML_${_pocket_backend_upper})
+            continue()
+        endif()
+        tts_cpp_register_test(test-pocket-flow-lm-${_pocket_backend} LABEL "fixture" EXE test-pocket-flow-lm
+            ARGS "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f32.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}" "0.0001" "--gpu"
+            REQUIRES "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f32.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}/provenance.json")
+        tts_cpp_register_test(test-pocket-flow-lm-f16-${_pocket_backend} LABEL "fixture" EXE test-pocket-flow-lm
+            ARGS "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}" "0.01" "--gpu"
+            REQUIRES "${TTS_CPP_POCKET_REFERENCE_DIR}/flow-lm-f16.gguf" "${TTS_CPP_POCKET_REFERENCE_DIR}/provenance.json")
+        tts_cpp_register_test(test-pocket-mimi-${_pocket_backend} LABEL "fixture" EXE test-pocket-mimi
+            ARGS "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/mimi.gguf" "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}" "--gpu"
+            REQUIRES "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/mimi.gguf" "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/provenance.json"
+                     "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/latents.npy" "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/pcm.npy"
+                     "${TTS_CPP_POCKET_MIMI_REFERENCE_DIR}/encoded.npy")
+        set_property(TEST test-pocket-flow-lm-${_pocket_backend} test-pocket-flow-lm-f16-${_pocket_backend} test-pocket-mimi-${_pocket_backend} APPEND PROPERTY LABELS "gpu")
+        set_property(TEST test-pocket-flow-lm-${_pocket_backend} test-pocket-flow-lm-f16-${_pocket_backend} test-pocket-mimi-${_pocket_backend} APPEND PROPERTY ENVIRONMENT "TTS_CPP_GPU_BACKEND=${_pocket_backend}")
+        if (TARGET tts-cpp)
+            tts_cpp_register_test(test-pocket-engine-${_pocket_backend} LABEL "fixture" EXE test-pocket-engine
+                ARGS "${TTS_CPP_POCKET_MODEL_DIR}" "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "--gpu"
+                REQUIRES "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "${TTS_CPP_POCKET_MODEL_DIR}/mimi.gguf"
+                         "${TTS_CPP_POCKET_MODEL_DIR}/frontend.json" "${TTS_CPP_POCKET_MODEL_DIR}/voice.gguf")
+            tts_cpp_register_test(test-pocket-fit-${_pocket_backend} LABEL "fixture" EXE test-pocket-fit
+                ARGS "${TTS_CPP_POCKET_MODEL_DIR}" "--gpu"
+                REQUIRES "${TTS_CPP_POCKET_MODEL_DIR}/flow-lm.gguf" "${TTS_CPP_POCKET_MODEL_DIR}/mimi.gguf"
+                         "${TTS_CPP_POCKET_MODEL_DIR}/frontend.json" "${TTS_CPP_POCKET_MODEL_DIR}/voice.gguf")
+            set_property(TEST test-pocket-engine-${_pocket_backend} test-pocket-fit-${_pocket_backend} APPEND PROPERTY LABELS "gpu")
+            set_property(TEST test-pocket-engine-${_pocket_backend} test-pocket-fit-${_pocket_backend} APPEND PROPERTY ENVIRONMENT "TTS_CPP_GPU_BACKEND=${_pocket_backend}")
+        endif()
+    endforeach()
 
     # ---- Audio8 tests (fixtures from scripts/dump-audio8-*-reference.py) ----
     set(_tcb_audio8_core_srcs
@@ -1748,6 +1860,12 @@ if (TTS_CPP_BUILD_TESTS)
     tts_cpp_apply_ccache(test-audio8-backend-parity)
     add_test(NAME test-audio8-backend-parity COMMAND test-audio8-backend-parity)
     set_tests_properties(test-audio8-backend-parity PROPERTIES LABELS "fixture" SKIP_RETURN_CODE 77)
+
+    add_executable(test-audio8-attention-cache test/audio8/test_attention_cache.cpp)
+    target_link_libraries(test-audio8-attention-cache PRIVATE tts-cpp ggml)
+    target_include_directories(test-audio8-attention-cache PRIVATE src)
+    tts_cpp_apply_ccache(test-audio8-attention-cache)
+    tts_cpp_register_test(test-audio8-attention-cache LABEL "unit")
 
     add_executable(test-audio8-hexagon-repack test/audio8/test_hexagon_repack.cpp)
     target_link_libraries(test-audio8-hexagon-repack PRIVATE tts-cpp ggml)
